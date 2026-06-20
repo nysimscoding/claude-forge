@@ -44,11 +44,15 @@ Use this when you want parallel external perspectives without launching tmux tea
 
 When invoked, Claude MUST follow this workflow:
 
-### 0. Apply video-analyst-lens (auto, every run)
+### 0. (조건부) 영상 분석이면 video-analyst-lens 적용
 
-`/ccg`가 시작되면 **별도 지시 없이** `video-analyst-lens` 스킬을 적용한다 (참조: `.claude/skills/video-analyst-lens/SKILL.md`). 효과: 근거 중심 증류·단순요약 금지·사실/해석 구분·미확인은 "확실치 않음"·최신 수치는 확인일 명시; 다중/장시간 영상은 전 프레임 확장 금지(전체 구조 먼저, 핵심 구간만 재스캔).
+> ⚠️ **이 파일은 머신 전역 기본 `ccg`다** (`~/.claude/skills/ccg` → `claude-forge/skills/ccg` 심볼릭). 여러 프로젝트에서 호출되므로, 이 Step 0은 **무조건 적용하지 않는다.**
 
-**필수 출력 구조 (정확히 이 헤더 레벨로 — PTM의 `## N.` 평면 스타일과 혼동 금지):**
+**적용 조건 — 입력이 영상/긴 녹화/YouTube URL 분석일 때만** 이 Step을 수행한다. 코드/PR/아키텍처/문서 등 **비-영상 자문이면 이 Step을 건너뛰고 곧장 Step 1**로 간다 (비-영상 프로젝트에 한국어 영상-분석 헤더를 강제 주입하지 않기 위함).
+
+영상 분석인 경우: 별도 지시 없이 `video-analyst-lens` 스킬을 적용한다 (참조: `~/.claude/skills/video-analyst-lens/SKILL.md` — user-level 절대경로, cwd 무관하게 존재). 효과: 근거 중심 증류·단순요약 금지·사실/해석 구분·미확인은 "확실치 않음"·최신 수치는 확인일 명시; 다중/장시간 영상은 전 프레임 확장 금지(전체 구조 먼저, 핵심 구간만 재스캔).
+
+**(영상 분석 시) 필수 출력 구조 (정확히 이 헤더 레벨로 — PTM의 `## N.` 평면 스타일과 혼동 금지):**
 ```md
 ## 영상 분석 (6-Section)
 
@@ -62,7 +66,7 @@ When invoked, Claude MUST follow this workflow:
 - ✅ 반드시 `## 영상 분석 (6-Section)` **래퍼 헤더** 아래 6개 섹션을 `### 1.`~`### 6.` (H3)로 중첩한다. ❌ `## 1.`~`## 6.` H2 평면화 금지(래퍼 없으면 Dataview/검색 누락처럼 보임 — 2026-06-20 mgw 사고).
 - 표준 위치: source note 본문 `## Strategies` 직후(Synthesis 앞). 이 6섹션이 Synthesis(Step 4)와 개념 추출의 입력이 된다.
 
-> 이 Step 0은 vault 전용 `.claude/skills/ccg/SKILL.md`와 동일 규칙이다. 이 fallback 사본만 따르더라도 렌즈가 누락되지 않게 하기 위해 명시한다.
+> Obsidian YouTube-리뷰 vault 안에서는 프로젝트 `CLAUDE.md`/`AGENTS.md`/`mgw`가 동일 규칙을 별도로 강제하므로 이 조건부 블록과 중복돼도 무방하다. vault 밖(비-영상) 프로젝트에서는 이 블록이 발동하지 않는다.
 
 ### 1. Decompose Request
 Split the user request into:
