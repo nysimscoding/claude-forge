@@ -19,10 +19,10 @@ Use this when you want parallel external perspectives without launching tmux tea
 
 ## Requirements
 
-- **Codex CLI**: `npm install -g @openai/codex` (or `@openai/codex`)
-- **Gemini CLI**: `npm install -g @google/gemini-cli`
-- `omc ask` command available
-- If either CLI is unavailable, continue with whichever provider is available and note the limitation
+- **Codex**: `codex` CLI (`npm install -g @openai/codex`) — call directly via `codex exec`, or use the `mcp__x__codex` MCP tool.
+- **Gemini**: the `mcp__g__gemini_generate` MCP tool with a free-tier API key. Default model `gemini-2.5-flash` (free tier). The `@google/gemini-cli` free path is dead (`IneligibleTierError: UNSUPPORTED_CLIENT`) and `gemini-2.0-flash` returns HTTP 429 (`limit: 0`) — do not use either.
+- Do **not** route advisors through `omc ask` (its `gemini` leg fails silently with outer exit 0 while the artifact records the IneligibleTier error).
+- If a provider is unavailable, continue with whichever is available and note the missing perspective. Never auto-escalate Gemini to a Pro model on failure (cost guard below).
 
 ## How It Works
 
@@ -31,11 +31,11 @@ Use this when you want parallel external perspectives without launching tmux tea
    - Codex prompt (analysis/architecture/backend)
    - Gemini prompt (UX/design/docs/alternatives)
 
-2. Claude runs via CLI (skill nesting not supported):
-   - `omc ask codex "<codex prompt>"`
-   - `omc ask gemini "<gemini prompt>"`
+2. Claude runs both advisors directly (skill nesting not supported):
+   - Codex: `codex exec "<codex prompt>"` (Bash tool) or the `mcp__x__codex` tool
+   - Gemini: `mcp__g__gemini_generate(model="gemini-2.5-flash", prompt="<gemini prompt>")`
 
-3. Artifacts are written under `.omc/artifacts/ask/`
+3. Advisor outputs are used directly (no `.omc/artifacts/ask/` files)
 
 4. Claude synthesizes both outputs into one final response
 ```
@@ -75,25 +75,40 @@ Split the user request into:
 - **Gemini prompt:** UX/content clarity, alternatives, edge-case usability, docs polish
 - **Synthesis plan:** how to reconcile conflicts
 
-### 2. Invoke advisors via CLI
+### 2. Invoke advisors
 
-> **Note:** Skill nesting (invoking a skill from within an active skill) is not supported in Claude Code. Always use the direct CLI path via Bash tool.
+> **Note:** Skill nesting is not supported. Call each advisor directly. Do **not** use `omc ask` (its Gemini leg is broken: `IneligibleTierError`, free CLI tier discontinued).
 
-Run both advisors:
+**Codex (architecture/backend):**
 
 ```bash
-omc ask codex "<codex prompt>"
-omc ask gemini "<gemini prompt>"
+# Direct CLI; redirect stdin from /dev/null so it never hangs waiting for input.
+codex exec "<codex prompt>" < /dev/null
 ```
 
-### 3. Collect artifacts
+Or use the `mcp__x__codex` tool if the CLI is unavailable.
 
-Read latest ask artifacts from:
+**Gemini (UX/docs/alternatives) — cost guard (mandatory):**
 
 ```text
-.omc/artifacts/ask/codex-*.md
-.omc/artifacts/ask/gemini-*.md
+Default model = gemini-2.5-flash (free tier). Pro models only on an explicit user flag.
+Do NOT use gemini-2.0-flash (HTTP 429, free-tier limit: 0) — use gemini-2.5-flash or gemini-flash-latest.
 ```
+
+Execution priority:
+
+```text
+1) MCP (default, free):  mcp__g__gemini_generate(model="gemini-2.5-flash", prompt="<gemini prompt>", max_tokens=4096)
+2) If the MCP tool is unavailable: skip Gemini → synthesize from Codex + Claude only, note "Gemini unused".
+```
+
+- `gemini-2.5-flash` spends thinking tokens before output — keep `max_tokens` generous (>=2048) or `text` can come back empty.
+- **Pro is OFF by default.** Only call a Pro model (e.g. `gemini-3.1-pro`) when the user explicitly asks ("gemini pro", `--gemini-pro`). Before any Pro call, warn + confirm: 💸 Pro is paid (no free tier); 📏 prompts over 200K tokens double the rate; 🧾 if billing is ON, even flash bills from the first token. An auth/quota failure must never silently escalate to Pro.
+- Per-run guard checklist: [ ] model is flash (free) unless an explicit Pro flag was given; [ ] prompt ≤ 200K tokens.
+
+### 3. Collect outputs
+
+With the direct path there are no `.omc/artifacts/ask/` files. Use the Codex `codex exec` stdout and the `mcp__g__gemini_generate` return value (`text`) directly as the two advisor outputs.
 
 ### 4. Synthesize
 
@@ -108,12 +123,13 @@ Return one unified answer with:
 
 If one provider is unavailable:
 
-- Continue with available provider + Claude synthesis
-- Clearly note missing perspective and risk
+- Continue with the available provider + Claude synthesis
+- Clearly note the missing perspective and risk
+- If Gemini fails (no MCP tool / quota), do **not** auto-escalate to a Pro model — just drop Gemini and note "Gemini unused"
 
 If both unavailable:
 
-- Fall back to Claude-only answer and state CCG external advisors were unavailable
+- Fall back to a Claude-only answer and state that the CCG external advisors were unavailable
 
 ## Invocation
 
