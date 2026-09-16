@@ -1,6 +1,10 @@
 ---
 name: dualsub
-description: 영상·오디오·유튜브 URL에서 이중자막(영문+한글)을 생성한다. Groq whisper-large-v3로 전사하고 Groq LLM으로 한글 번역해 EN/KO/이중 VTT·SRT·TXT를 출력한다. 트리거: "자막 만들어", "이중자막", "영한 자막", "transcribe", "subtitle", "dualsub".
+description: |
+  영상·오디오·유튜브 URL에서 이중자막(영문+한글)을 생성한다.
+  Groq whisper-large-v3로 전사하고 Groq LLM으로 한글 번역해
+  EN/KO/이중 VTT·SRT·TXT를 출력한다.
+  트리거: "자막 만들어", "이중자막", "영한 자막", "transcribe", "subtitle", "dualsub".
 aliases:
   - dualsub
   - 이중자막
