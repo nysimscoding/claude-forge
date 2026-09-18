@@ -116,7 +116,7 @@ def transcribe(chunks, work, key, model, chunk_sec):
 
 REASONING_MODELS = re.compile(r"gpt-oss|qwen3|deepseek-r1|reasoning", re.I)
 
-def groq_chat(key, model, messages, temperature=0.2, max_tokens=8192):
+def groq_chat(key, model, messages, temperature=0.2, max_tokens=8192, json_mode=False):
     """(content, finish_reason)를 반환. reasoning 모델은 추론 토큰을 최소화한다.
 
     max_completion_tokens를 명시하지 않으면 reasoning 모델이 추론에 출력 예산을
@@ -126,6 +126,8 @@ def groq_chat(key, model, messages, temperature=0.2, max_tokens=8192):
                "max_completion_tokens": max_tokens}
     if REASONING_MODELS.search(model):
         payload["reasoning_effort"] = "low"
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     req = urllib.request.Request(f"{GROQ}/chat/completions",
         data=json.dumps(payload).encode(),
         headers={"Authorization": f"Bearer {key}", "User-Agent": "curl/8.7.1",
@@ -143,18 +145,35 @@ def groq_chat(key, model, messages, temperature=0.2, max_tokens=8192):
                 raise
     sys.exit("번역 429 과다")
 
-def parse_numbered(text, n):
-    """번호 매긴 응답을 1..n 인덱스 맵으로 파싱한다."""
-    lines = {}
-    for ln in text.splitlines():
-        m = re.match(r"\s*(\d+)[.)]\s*(.*)", ln)
-        if m:
-            k, v = int(m.group(1)), m.group(2).strip()
-            if 1 <= k <= n and v: lines[k] = v
-    return lines
+def parse_json_map(text):
+    """JSON 객체 응답을 {키: 문자열} 맵으로 파싱한다.
+
+    번호 매긴 평문 대신 JSON을 쓰는 이유: 모델이 줄을 합치거나 끝에 한 줄을
+    덧붙이면 번호 파싱은 배치 전체의 정렬이 통째로 밀린다. 키가 명시되면
+    누락은 생겨도 어긋난 매칭은 생기지 않는다.
+    """
+    try:
+        d = json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m: return {}
+        try: d = json.loads(m.group(0))
+        except json.JSONDecodeError: return {}
+    if not isinstance(d, dict): return {}
+    return {str(k): v for k, v in d.items() if isinstance(v, str)}
+
+def is_echo(translated, source):
+    """모델이 번역하지 않고 원문을 그대로 돌려준 경우.
+
+    기술 용어·고유명사는 원문 유지가 정상이므로 4단어 이상인 문장만 본다.
+    """
+    return translated.strip() == source.strip() and len(source.split()) > 3
 
 def translate_block(key, llm, lang_name, block):
     """한 배치를 번역한다. 누락분은 배치를 절반씩 줄여 재시도한다.
+
+    배치가 크면(실측 40줄) 모델이 조각난 자막을 문장 흐름 단위로 재배분해
+    키와 내용이 어긋난다. JSON 키로도 막히지 않으므로 배치를 작게 유지한다.
 
     반환: (번역 리스트, 끝내 실패한 인덱스 리스트)
     """
@@ -166,24 +185,31 @@ def translate_block(key, llm, lang_name, block):
         truncated = False
         for k in range(0, len(pending), size):
             grp = pending[k:k+size]
-            numbered = "\n".join(f"{n+1}. {block[j]}" for n, j in enumerate(grp))
-            prompt = (f"Translate these subtitle lines to natural {lang_name}. "
-                      f"Keep technical terms (code, tool names) as-is. "
-                      f"Return EXACTLY {len(grp)} numbered lines, same order, "
-                      f"no preamble, no extra text.\n\n{numbered}")
-            content, finish = groq_chat(key, llm, [{"role": "user", "content": prompt}])
-            got = parse_numbered(content, len(grp))
+            src = {str(n+1): block[j] for n, j in enumerate(grp)}
+            prompt = (f"Translate each subtitle line to natural {lang_name}.\n"
+                      f"Keep technical terms (code, tool names) as-is.\n"
+                      f"Input is a JSON object mapping line-id to source text.\n"
+                      f"CRITICAL: each value is ONE subtitle line, often a sentence FRAGMENT.\n"
+                      f"Translate each value strictly on its own. If it is a fragment, keep it a\n"
+                      f"fragment - do not complete it, do not borrow words from a neighbouring\n"
+                      f"line, and never shift meaning between keys.\n"
+                      f"Return ONLY a JSON object with the SAME keys.\n\n"
+                      + json.dumps(src, ensure_ascii=False, indent=1))
+            content, finish = groq_chat(key, llm, [{"role": "user", "content": prompt}],
+                                        json_mode=True)
+            got = parse_json_map(content)
             for n, j in enumerate(grp):
-                if got.get(n+1): out[j] = got[n+1]
+                v = (got.get(str(n+1)) or "").strip()
+                if v and not is_echo(v, block[j]): out[j] = v
             truncated = truncated or finish == "length"
         pending = [j for j in pending if not out[j].strip()]
         if pending:
             size = max(1, size // 2)
-            why = "응답 잘림" if truncated else "파싱 누락"
+            why = "응답 잘림" if truncated else "키 누락·원문 echo"
             log(f"  {why} {len(pending)}건 — 배치 {size}로 재시도")
     return out, pending
 
-def translate(segs, work, key, llm, to_lang, batch=40):
+def translate(segs, work, key, llm, to_lang, batch=10):
     texts = [s["text"] for s in segs]
     cache = work / "ko.json"
     done = json.loads(cache.read_text()) if cache.exists() else {}
